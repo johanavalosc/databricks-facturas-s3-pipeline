@@ -31,9 +31,8 @@ WHERE target_table_full_name LIKE 'pf_avalos.%'
 
 -- COMMAND ----------
 
-SELECT period_start_time, job_name, run_id, task_key, execution_state
+SELECT period_start_time, run_name, run_id, result_state
 FROM system.lakeflow.job_run_timeline
-WHERE event_date >= current_date() - INTERVAL 7 DAYS
 ORDER BY period_start_time DESC
 LIMIT 20;
 

@@ -74,6 +74,8 @@ graph TD
 | **C5** | **Observabilidad y Optimización** | **Liquid Clustering** por `(periodo_fiscal, categoria_gasto)`, ejecución de `OPTIMIZE`, evidencia en `DESCRIBE DETAIL` y consultas a `system.access.audit`. | ✅ Completo |
 | **O7** | **Opcional: Ingesta desde S3** | Conexión e integración con recursos de la nube desde bucket AWS S3 (`nautilus-facturas01`). | ✅ Completo |
 
+> **Nota sobre temas opcionales:** Siguiendo la asignación oficial del profesor (*"Johan Avalos: Ingesta y conexión con recursos de la nube como S3: O7"*), se integró la ingesta desde bucket **AWS S3 (`nautilus-facturas01`)**. Además, para maximizar la preparación al examen de certificación, **se desarrollaron los 5 componentes estándar del examen en su totalidad** (C1, C2, C3, C4, C5), cumpliendo el 100% de la columna vertebral y componentes adicionales.
+
 ---
 
 ## 💡 4. Decisiones de Diseño y Justificación Técnica
@@ -120,6 +122,38 @@ El particionado tradicional mediante carpetas (`/periodo_fiscal=2026-10/`) gener
    - Corre el notebook. Se aplicarán los permisos, el **Column Masking** en la cédula del emisor y el **Row Filter** por departamento.
 7. **Paso 7: `05_observabilidad.sql`**
    - Corre el notebook para ejecutar `OPTIMIZE` con Liquid Clustering e inspeccionar las consultas a las System Tables.
+
+---
+
+## 📸 6. Evidencias Visuales de Ejecución
+
+### 1. Ingesta Incremental con Auto Loader (Bronze)
+Muestra el procesamiento de los lotes donde cada lote aparece exactamente una vez con su hora de ingesta:
+![Evidencia Bronze Incremental](docs/images/01_bronze_incremental.png)
+
+### 2. Capa Silver y Métricas Antes/Después
+Tipado estricto, deduplicación y cruce dimensional con proveedores:
+![Evidencia Silver Métricas](docs/images/02_silver_metricas.png)
+
+### 3. Reglas de Calidad y Rechazo en Gold (CHECK Constraints)
+La celda falla intencionalmente al intentar insertar un gasto negativo (`gasto_no_negativo` violado):
+![Evidencia Gold Constraint Error](docs/images/03_gold_constraint_error.png)
+
+### 4. Gobernanza y Etiquetas en Unity Catalog
+Etiquetado de columnas sensibles (`PII: Confidencial` y `Dominio: Financiero`) consultadas en `system.information_schema.column_tags`:
+![Evidencia Gobernanza Tags](docs/images/04_gobernanza_tags.png)
+
+### 5. Observabilidad y Liquid Clustering
+Compactación con `OPTIMIZE` y validación de `clusteringColumns` en `DESCRIBE DETAIL`:
+![Evidencia Observabilidad Clustering](docs/images/05_observabilidad_clustering.png)
+
+### 6. Orquestación con Lakeflow Jobs (DAG de 3 Tareas)
+Pipeline automatizado con dependencias lineales y reintentos:
+![Evidencia Lakeflow Job DAG](docs/images/06_lakeflow_job_dag.png)
+
+### 7. Corrida Oficial Exitosa en Producción (Green Run)
+Ejecución completa del pipeline en Serverless Compute (Run ID: `75343079404296` - `Succeeded`):
+![Evidencia Lakeflow Run Succeeded](docs/images/07_lakeflow_run_succeeded.png)
 
 ---
 
