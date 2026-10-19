@@ -1,22 +1,19 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 🏢 Pipeline de Facturación B2B · 00 · Configuración Inicial y Sincronización S3
+# MAGIC # 🏢 Plataforma de Auditoría Fiscal B2B · 00 · Configuración y Volumes
 # MAGIC 
-# MAGIC Este notebook establece la base de gobernanza en **Unity Catalog** para el proyecto de auditoría fiscal y control de compras empresariales.
+# MAGIC Este notebook inicializa la arquitectura de almacenamiento y gobernanza en **Unity Catalog** para la auditoría y control de compras empresariales.
 # MAGIC 
-# MAGIC ### ¿Para qué sirve este paso?
-# MAGIC 1. Crea el catálogo gobernado **`pf_avalos`** y los 3 esquemas de la **Arquitectura Medallion** (`bronze`, `silver`, `gold`).
-# MAGIC 2. Crea el **Volume administrado** `pf_avalos.bronze.landing` donde aterrizan los archivos crudos.
-# MAGIC 3. Provee la tabla dimensional maestra de **Proveedores** (`silver.cat_proveedores`) para enriquecer las compras mediante un `JOIN`.
-# MAGIC 4. Sincroniza las facturas electrónicas desde el bucket **AWS S3** (`nautilus-facturas01`) hacia el Volume organizadas por **lotes** (`lote_1`, `lote_2`), permitiendo evaluar la ingesta incremental de Auto Loader.
-# MAGIC 
-# MAGIC ### ¿Por qué lo pide el profesor para el examen?
-# MAGIC - **Sección 7 del examen (Data Governance):** Evalúa la jerarquía de 3 niveles de Unity Catalog (`catalog.schema.table_or_volume`) y el uso de Volumes administrados en lugar del DBFS tradicional en desuso.
+# MAGIC ### 🎯 Alcance del Componente:
+# MAGIC 1. **Jerarquía Medallion:** Despliegue del catálogo **`pf_avalos`** con segregación lógica de esquemas (`bronze`, `silver`, `gold`).
+# MAGIC 2. **Almacenamiento Administrado:** Creación del volumen `pf_avalos.bronze.landing` para el aterrizaje de archivos sin dependencias de infraestructura legada.
+# MAGIC 3. **Dimensión de Proveedores:** Inicialización del catálogo dimensional homologado (`silver.cat_proveedores`) para enriquecimiento cruzado.
+# MAGIC 4. **Gestión de Lotes de Ingesta:** Sincronización controlada de facturas comerciales estructuradas (XML/JSON) para la evaluación de procesamiento incremental.
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- 1. Creación de la jerarquía Medallion en Unity Catalog
+# MAGIC -- 1. Jerarquía Medallion en Unity Catalog
 # MAGIC CREATE CATALOG IF NOT EXISTS pf_avalos
 # MAGIC   COMMENT 'Catálogo central de auditoría y análisis de gastos empresariales';
 # MAGIC 
@@ -29,15 +26,15 @@
 # MAGIC CREATE SCHEMA IF NOT EXISTS pf_avalos.gold
 # MAGIC   COMMENT 'Capa Gold: Resumen analítico de gastos, crédito fiscal IVA y reglas CHECK';
 # MAGIC 
-# MAGIC -- Volume para el aterrizaje de archivos desde S3
+# MAGIC -- Volume administrado para aterrizaje de archivos
 # MAGIC CREATE VOLUME IF NOT EXISTS pf_avalos.bronze.landing
-# MAGIC   COMMENT 'Volume administrado para el almacenamiento temporal de facturas JSON/XML';
+# MAGIC   COMMENT 'Volume administrado para almacenamiento temporal de facturas JSON/XML';
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. Catálogo Maestro de Proveedores (Tabla Dimensional para el JOIN)
-# MAGIC En el examen y en la vida real, una tabla de transacciones de compra debe enriquecerse con información del proveedor (actividad económica, régimen de deducibilidad, categoría corporativa).
+# MAGIC ## 2. Catálogo Maestro de Proveedores (Dimensión Homologada)
+# MAGIC Estructura de referencia para normalizar razones sociales, cédulas jurídicas y deducibilidad de impuestos.
 
 # COMMAND ----------
 
@@ -52,7 +49,7 @@
 # MAGIC   es_deducible_iva BOOLEAN NOT NULL,
 # MAGIC   plazo_pago_dias INT
 # MAGIC )
-# MAGIC COMMENT 'Catálogo maestro de proveedores homologados para compras empresariales';
+# MAGIC COMMENT 'Catálogo maestro de proveedores corporativos homologados';
 # MAGIC 
 # MAGIC INSERT OVERWRITE silver.cat_proveedores VALUES
 # MAGIC   ('PRV-001', '3-101-554433', 'DISTRIBUIDORA Y REPUESTOS LA CENTRAL S.A.', 'Repuestos y Mantenimiento', true, 30),
@@ -67,23 +64,21 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Sincronización y Generación de Lotes (Tema O7: Ingesta desde S3)
-# MAGIC Selecciona el lote para probar la ingesta incremental de Auto Loader:
-# MAGIC - **Lote 1:** Primer conjunto de facturas (5 compras corporativas).
-# MAGIC - **Lote 2:** Segundo conjunto de facturas (nuevas compras que no deben duplicar el lote 1).
+# MAGIC ## 3. Gestión y Despacho de Lotes de Facturas
+# MAGIC Permite simular el flujo continuo de compras organizando las transacciones en lotes cronológicos:
+# MAGIC - **Lote 1:** Transacciones base de apertura de período.
+# MAGIC - **Lote 2:** Transacciones complementarias para validación de ingesta incremental.
 
 # COMMAND ----------
 
 import json
 import os
 
-# Widget interactivo para seleccionar el lote
 dbutils.widgets.dropdown("lote", "1", ["1", "2"], "Lote de Facturas")
 lote_seleccionado = dbutils.widgets.get("lote")
 
 ruta_destino = f"/Volumes/pf_avalos/bronze/landing/facturas/lote_{lote_seleccionado}"
 
-# Datos de facturas electrónicas reales estructuradas en JSON
 facturas_lote_1 = [
     {
         "clave_hacienda": "50619102600310155443300100001010000000001198765432",
@@ -202,14 +197,12 @@ facturas_lote_2 = [
     }
 ]
 
-# Seleccionar datos según el lote
 datos_actuales = facturas_lote_1 if lote_seleccionado == "1" else facturas_lote_2
 
-# Escribir en el Volume en formato JSON
 df_lote = spark.createDataFrame(datos_actuales)
 (df_lote.write
    .mode("overwrite")
    .json(ruta_destino))
 
-print(f"✅ Lote {lote_seleccionado} escrito exitosamente en: {ruta_destino}")
+print(f"✅ Lote {lote_seleccionado} preparado exitosamente en: {ruta_destino}")
 display(dbutils.fs.ls("/Volumes/pf_avalos/bronze/landing/facturas/"))

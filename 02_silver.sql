@@ -1,18 +1,15 @@
 -- Databricks notebook source
 -- MAGIC %md
--- MAGIC # 🥈 Pipeline de Facturación B2B · 02 · Limpieza y Enriquecimiento Silver
+-- MAGIC # 🥈 Plataforma de Auditoría Fiscal B2B · 02 · Transformación y Calidad Silver
 -- MAGIC 
--- MAGIC **Columna vertebral, parte 2 · Sección 3 del examen (Data Transformation and Cleansing).**
+-- MAGIC Este notebook procesa la capa intermedia (**Silver**), encargada de la homologación, tipado estricto, saneamiento y enriquecimiento relacional de las compras.
 -- MAGIC 
--- MAGIC ### ¿Para qué sirve este paso?
--- MAGIC Los datos crudos en Bronze contienen textos sucios, monedas mixtas (USD y CRC), posibles duplicados de transmisión y requieren enriquecerse.
--- MAGIC Este notebook transforma las compras en **`pf_avalos.silver.facturas_validadas`**:
--- MAGIC 1. **Tipado Estricto:** Convierte textos a timestamps, fechas fiscales (`yyyy-MM`) y números decimales.
--- MAGIC 2. **Normalización Monetaria:** Convierte facturas en dólares a colones (CRC) usando el tipo de cambio oficial de la transacción.
--- MAGIC 3. **Tratamiento Justificado de Nulos:** Regla contable estricta de auditoría.
--- MAGIC 4. **Deduplicación por Llave del Negocio:** La clave fiscal de 50 dígitos (`clave_hacienda`).
--- MAGIC 5. **JOIN Enriquecedor:** Conecta con el catálogo maestro de proveedores (`silver.cat_proveedores`) para obtener actividad, categoría contable y deducibilidad de IVA.
--- MAGIC 6. **Métricas Antes y Después:** Evidencia comparativa requerida por la rúbrica.
+-- MAGIC ### 🎯 Objetivos de Transformación:
+-- MAGIC 1. **Tipado Estricto de Datos:** Conversión de campos a timestamps, fechas de período fiscal (`yyyy-MM`) y valores numéricos de precisión.
+-- MAGIC 2. **Normalización Monetaria Unificada:** Conversión de montos en divisa extranjera (USD) a colones (**CRC**) con base en el tipo de cambio oficial de la transacción.
+-- MAGIC 3. **Integridad y Deduplicación Determinista:** Deduplicación estricta por la clave tributaria única del comprobante (`clave_hacienda`).
+-- MAGIC 4. **Enriquecimiento Relacional (JOIN):** Cruce con el catálogo corporativo de proveedores (`silver.cat_proveedores`) para auditar la deducibilidad del IVA.
+-- MAGIC 5. **Métricas de Control de Calidad:** Celda comparativa de volumen y saneamiento antes vs. después.
 
 -- COMMAND ----------
 
@@ -20,7 +17,7 @@ USE CATALOG pf_avalos;
 
 -- COMMAND ----------
 
--- Transformación y Limpieza Silver
+-- Transformación, Enriquecimiento y Saneamiento en Silver
 CREATE OR REPLACE TABLE silver.facturas_validadas AS
 WITH facturas_tipadas AS (
   SELECT
@@ -41,13 +38,13 @@ WITH facturas_tipadas AS (
     f.archivo_origen,
     f.fecha_ingesta
   FROM bronze.facturas_raw f
-  -- Regla de integridad fiscal: Descartar facturas sin clave tributaria o sin total
+  -- Regla de integridad fiscal: descartar registros sin clave tributaria o con monto negativo inicial
   WHERE f.clave_hacienda IS NOT NULL 
     AND f.monto_total IS NOT NULL
     AND f.monto_total >= 0
 ),
 facturas_deduplicadas AS (
-  -- Deduplicación por la llave de negocio: conservamos la versión más reciente ingestada
+  -- Deduplicación por llave natural de negocio conservando la última versión ingestada
   SELECT *
   FROM facturas_tipadas
   QUALIFY ROW_NUMBER() OVER (
@@ -55,7 +52,7 @@ facturas_deduplicadas AS (
     ORDER BY fecha_ingesta DESC
   ) = 1
 )
--- JOIN con el Catálogo de Proveedores para enriquecer la transacción
+-- Cruce con catálogo dimensional de proveedores
 SELECT
   d.clave_hacienda,
   d.consecutivo,
@@ -70,11 +67,11 @@ SELECT
   d.concepto,
   d.moneda,
   d.tipo_cambio,
-  -- Conversión a moneda estandarizada (Colones CRC)
+  -- Normalización cambiaria a moneda base (CRC)
   round(CASE WHEN d.moneda = 'USD' THEN d.monto_subtotal_orig * d.tipo_cambio ELSE d.monto_subtotal_orig END, 2) AS subtotal_crc,
   round(CASE WHEN d.moneda = 'USD' THEN d.monto_iva_orig * d.tipo_cambio ELSE d.monto_iva_orig END, 2) AS iva_crc,
   round(CASE WHEN d.moneda = 'USD' THEN d.monto_total_orig * d.tipo_cambio ELSE d.monto_total_orig END, 2) AS total_crc,
-  -- Cálculo de Crédito Fiscal: solo se acredita si el proveedor y rubro son deducibles
+  -- Cálculo de Crédito Fiscal: condicionado a la deducibilidad legal del proveedor
   round(CASE 
     WHEN p.es_deducible_iva = true THEN (CASE WHEN d.moneda = 'USD' THEN d.monto_iva_orig * d.tipo_cambio ELSE d.monto_iva_orig END)
     ELSE 0.0 
@@ -91,8 +88,8 @@ INNER JOIN silver.cat_proveedores p
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ### 📊 Métricas Antes y Después (Evidencia Obligatoria)
--- MAGIC Esta consulta compara el volumen y calidad entre la capa cruda (`bronze`) y la capa limpia (`silver`).
+-- MAGIC ### 📊 Métricas Comparativas de Calidad (Bronze vs. Silver)
+-- MAGIC Validación cuantitativa del proceso de depuración, comprobando la eliminación de duplicados y la consistencia en el total monetario.
 
 -- COMMAND ----------
 
@@ -105,7 +102,7 @@ SELECT
 FROM bronze.facturas_raw
 UNION ALL
 SELECT 
-  'silver (limpia)',
+  'silver (homologada)',
   count(*),
   count(DISTINCT clave_hacienda),
   count(CASE WHEN clave_hacienda IS NULL THEN 1 END),
@@ -115,15 +112,12 @@ FROM silver.facturas_validadas;
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ### 📝 RESPUESTA AL EXAMEN DE CERTIFICACIÓN
+-- MAGIC ### 📋 Justificación Técnica de Arquitectura: Modelo de Deduplicación e Integridad Fiscal
 -- MAGIC 
--- MAGIC **Pregunta del docente:**  
--- MAGIC *¿Qué regla usaste para los nulos y los duplicados, y por qué esa y no otra?*
--- MAGIC 
--- MAGIC **Respuesta técnica (Data Engineer Associate):**  
--- MAGIC 1. **Deduplicación:**  
--- MAGIC    - **Llave elegida:** `clave_hacienda`. Es un estándar tributario de 50 caracteres único a nivel país que incluye código de país, día, mes, año, cédula del emisor y número consecutivo. No puede existir dos veces una misma clave en el sistema tributario.
--- MAGIC    - **Mecanismo:** Se utilizó la cláusula `QUALIFY ROW_NUMBER() OVER (PARTITION BY clave_hacienda ORDER BY fecha_ingesta DESC) = 1`. Se eligió este método porque ante retransmisiones de red o reenvíos de correo, garantiza conservar la versión con la marca de tiempo de ingesta más reciente de forma determinista y eficiente en Spark SQL.
--- MAGIC 2. **Tratamiento de Nulos:**  
--- MAGIC    - **Regla de Rechazo:** Si `clave_hacienda` o `monto_total` son nulos, el registro se descarta en el `WHERE`, ya que contablemente un comprobante sin número fiscal o sin monto es inexistente y violaría la legislación tributaria.
--- MAGIC    - **Regla de Imputación:** Para variables accesorias se usó `coalesce()`: Si `moneda` es nula se asume `CRC` (moneda de curso legal), si `condicion_venta` es nula se asume `CONTADO`, y si `departamento` es nulo se asigna a `Operaciones`.
+-- MAGIC **Decisiones de Modelado:**
+-- MAGIC 1. **Criterio de Deduplicación:**  
+-- MAGIC    - **Llave Seleccionada:** `clave_hacienda`. Es la clave tributaria estándar de 50 dígitos que identifica unívocamente cada factura electrónica a nivel nacional.
+-- MAGIC    - **Estrategia Spark SQL:** Se implementó `QUALIFY ROW_NUMBER() OVER (PARTITION BY clave_hacienda ORDER BY fecha_ingesta DESC) = 1`. Garantiza que ante duplicados por reintentos de red o retransmisión de lotes, se mantenga deterministamente el registro con la marca de tiempo de ingesta más reciente.
+-- MAGIC 2. **Tratamiento de Nulos y Valores Inválidos:**  
+-- MAGIC    - **Política de Filtrado Estricto:** Comprobantes sin `clave_hacienda` o sin monto total son descartados de inmediato, dado que contablemente representan transacciones nulas no deducibles.
+-- MAGIC    - **Imputación Defensiva:** Para atributos no críticos se utilizó `coalesce()`: moneda por defecto `CRC`, condición de venta `CONTADO` y departamento asignado a `Operaciones`.

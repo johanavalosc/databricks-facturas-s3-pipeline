@@ -1,23 +1,19 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 🥉 Pipeline de Facturación B2B · 01 · Ingesta Incremental Bronze
+# MAGIC # 🥉 Plataforma de Auditoría Fiscal B2B · 01 · Ingesta Incremental Bronze
 # MAGIC 
-# MAGIC **Columna vertebral, parte 1 · Sección 2 del examen (Data Ingestion with Auto Loader).**
+# MAGIC Este notebook orquesta la ingesta continua y escalable de facturas electrónicas hacia la capa Bronze gobernada mediante **Databricks Auto Loader** (`cloudFiles`).
 # MAGIC 
-# MAGIC ### ¿Para qué sirve este paso?
-# MAGIC En una empresa real, las facturas llegan de manera continua a lo largo del día. Este notebook utiliza **Databricks Auto Loader** (`cloudFiles`) para detectar automáticamente archivos nuevos en el Volume de aterrizaje e ingestarlos en la tabla Delta cruda **`pf_avalos.bronze.facturas_raw`**.
-# MAGIC 
-# MAGIC ### ¿Por qué lo pide el profesor para el examen?
-# MAGIC 1. **Auto Loader con `format("cloudFiles")`:** Es la tecnología estándar recomendada por Databricks frente al antiguo `COPY INTO` para ingesta de archivos semiestructurados (JSON, CSV, XML).
-# MAGIC 2. **Inferencia y evolución de esquema (`schemaLocation`):** Garantiza que si un proveedor agrega un campo nuevo a la factura, el pipeline no reviente.
-# MAGIC 3. **Auditoría de linaje (`_metadata`):** Cada fila debe registrar exactamente el archivo físico de donde provino (`_metadata.file_path`) y la marca de tiempo de ingesta.
-# MAGIC 4. **Idempotencia incremental:** Demuestra que al procesar Lote 1 y luego Lote 2, el sistema **nunca duplica facturas** ya procesadas.
+# MAGIC ### 🎯 Principios de Diseño:
+# MAGIC 1. **Ingesta Orientada a Flujos Continuos:** Detección automática y carga eficiente de archivos semiestructurados (JSON) desde el Volume de aterrizaje.
+# MAGIC 2. **Inferencia y Evolución Segura de Esquema:** Empleo de `schemaLocation` para adaptar cambios de estructura sin interrumpir el servicio.
+# MAGIC 3. **Trazabilidad y Linaje:** Inclusión de metadatos del archivo de origen (`_metadata.file_path`) y marca temporal de ingestión.
+# MAGIC 4. **Procesamiento Idempotente (Exactly-Once):** Garantía estricta de no duplicación de registros ante ejecuciones sucesivas.
 
 # COMMAND ----------
 
 from pyspark.sql import functions as F
 
-# Rutas de ingesta y puntos de control
 origen = "/Volumes/pf_avalos/bronze/landing/facturas/"
 formato = "json"
 tabla_bronze = "pf_avalos.bronze.facturas_raw"
@@ -25,7 +21,7 @@ checkpoint = "/Volumes/pf_avalos/bronze/landing/_checkpoints/facturas_raw"
 
 # COMMAND ----------
 
-# Ingesta Incremental Streaming con Auto Loader
+# Pipeline de Ingesta Incremental con Auto Loader
 (spark.readStream.format("cloudFiles")
     .option("cloudFiles.format", formato)
     .option("cloudFiles.schemaLocation", checkpoint)
@@ -36,16 +32,15 @@ checkpoint = "/Volumes/pf_avalos/bronze/landing/_checkpoints/facturas_raw"
     .withColumn("fecha_ingesta", F.current_timestamp())
     .writeStream
     .option("checkpointLocation", checkpoint)
-    .trigger(availableNow=True)   # Modo serverless: procesa todos los archivos disponibles y se detiene
+    .trigger(availableNow=True)
     .toTable(tabla_bronze)
     .awaitTermination())
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 🔍 Evidencia de la Ingesta Incremental (Rúbrica de Evaluación)
-# MAGIC Corre esta celda después de haber cargado el **Lote 1** y el **Lote 2** desde el notebook `00_config`.
-# MAGIC **Criterio de aprobación:** Cada lote debe aparecer **una sola vez**, con su conteo exacto de facturas y su propia hora de ingesta.
+# MAGIC ### 🔍 Evidencia de Ingesta Incremental
+# MAGIC Conteo de transacciones agrupadas por lote físico de llegada. Cada lote debe figurar una sola vez con su respectiva marca temporal.
 
 # COMMAND ----------
 
@@ -62,14 +57,13 @@ display(spark.sql(f"""
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 📝 RESPUESTA AL EXAMEN DE CERTIFICACIÓN
+# MAGIC ### 📋 Justificación Técnica de Arquitectura: Checkpoints e Idempotencia
 # MAGIC 
-# MAGIC **Pregunta del docente:**  
-# MAGIC *¿Qué pasaría si corres esta ingesta dos veces seguidas sin archivos nuevos? ¿Qué guarda el checkpoint para que eso pase?*
+# MAGIC **Evaluación de escenario:** *¿Qué ocurre al ejecutar esta ingesta de forma consecutiva sin llegada de archivos nuevos?*
 # MAGIC 
-# MAGIC **Respuesta técnica (Data Engineer Associate):**  
-# MAGIC 1. **Comportamiento:** Si se ejecuta el pipeline sin archivos nuevos, el streaming con `trigger(availableNow=True)` se inicia, escanea la ruta del Volume, detecta que **0 archivos nuevos están pendientes** y termina inmediatamente de forma exitosa sin escribir ninguna fila en `pf_avalos.bronze.facturas_raw`. La operación es 100% **idempotente**.
-# MAGIC 2. **Qué almacena el Checkpoint:** El directorio `_checkpoints` almacena:
-# MAGIC    - **`offsets/`**: Registra los identificadores y marcas de agua de los archivos físicos que ya fueron descubiertos en el almacenamiento.
-# MAGIC    - **`commits/`**: Registra las micro-tandas que se completaron con éxito en la tabla Delta (garantía de procesamiento *exactly-once*).
-# MAGIC    - **`_schemas/`**: El esquema inferido por Auto Loader, permitiendo detectar si un archivo nuevo contiene columnas adicionales sin necesidad de volver a inferir todo el histórico.
+# MAGIC **Decisión de Ingeniería:**
+# MAGIC - **Comportamiento Operativo:** Auto Loader evalúa la ruta física en el Volume contra el registro de estado del stream. Al detectar 0 archivos pendientes, la ejecución con `trigger(availableNow=True)` finaliza exitosamente en milisegundos sin insertar filas vacías ni duplicados en `pf_avalos.bronze.facturas_raw`. La operación es **100% idempotente**.
+# MAGIC - **Rol del Checkpoint:** En el directorio `_checkpoints`, Spark mantiene:
+# MAGIC   - **`offsets/`**: Bitácora cronológica con los identificadores de los archivos ya indexados.
+# MAGIC   - **`commits/`**: Registro atómico de las micro-tandas confirmadas en la tabla Delta, garantizando semántica de procesamiento *exactly-once*.
+# MAGIC   - **`_schemas/`**: Esquema inferido persistido, lo que evita escaneos de inferencia repetitivos y gestiona la evolución del esquema en caliente.

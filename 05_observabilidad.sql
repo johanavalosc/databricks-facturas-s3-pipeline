@@ -1,16 +1,14 @@
 -- Databricks notebook source
 -- MAGIC %md
--- MAGIC # ⚡ Pipeline de Facturación B2B · 05 · Observabilidad y Optimización
+-- MAGIC # ⚡ Plataforma de Auditoría Fiscal B2B · 05 · Optimización y Observabilidad
 -- MAGIC 
--- MAGIC **Componente 5 del examen · Secciones 6 y 7 (Optimization, Performance, and System Tables Monitoring).**
+-- MAGIC Este notebook implementa técnicas avanzadas de aceleración de consultas mediante **Liquid Clustering** y supervisa la actividad operacional y de linaje mediante **System Tables**.
 -- MAGIC 
--- MAGIC ### ¿Para qué sirve este paso?
--- MAGIC Un Data Engineer no solo escribe pipelines, sino que garantiza que las consultas vuelen en producción con bajo consumo de DBUs y monitorea la salud del sistema.
--- MAGIC Este notebook implementa:
--- MAGIC 1. **Liquid Clustering (`CLUSTER BY`):** La técnica de optimización de última generación de Delta Lake que reemplaza al particionado rígido tradicional.
--- MAGIC 2. **Compactación Física (`OPTIMIZE`):** Reorganización de micro-archivos Parquet para maximizar el *Data Skipping*.
--- MAGIC 3. **Inspección de Metadatos:** Verificación con `DESCRIBE DETAIL` y `DESCRIBE HISTORY`.
--- MAGIC 4. **Telemetría con System Tables:** Consultas de auditoría, linaje y tiempos de ejecución del Lakeflow Job.
+-- MAGIC ### 🎯 Alcance de Rendimiento y Monitoreo:
+-- MAGIC 1. **Liquid Clustering (`CLUSTER BY`):** Reorganización multidimensional de datos en Delta Lake sin las restricciones del particionado tradicional.
+-- MAGIC 2. **Compactación Física (`OPTIMIZE`):** Unificación de micro-archivos para maximizar el *Data Skipping*.
+-- MAGIC 3. **Auditoría de Acceso:** Inspección de eventos sobre el catálogo en `system.access.audit`.
+-- MAGIC 4. **Trazabilidad de Linaje:** Seguimiento de transformaciones en `system.access.table_lineage`.
 
 -- COMMAND ----------
 
@@ -20,22 +18,20 @@ USE CATALOG pf_avalos;
 
 -- MAGIC %md
 -- MAGIC ## 1. Optimización con Liquid Clustering
--- MAGIC Aplicamos Liquid Clustering sobre la tabla central **`silver.facturas_validadas`** agrupando por **`periodo_fiscal`** y **`categoria_gasto`**.
+-- MAGIC Configuración de agrupamiento multidimensional en `silver.facturas_validadas` por `periodo_fiscal` y `categoria_gasto`.
 
 -- COMMAND ----------
 
--- Configurar Liquid Clustering en la tabla principal
 ALTER TABLE silver.facturas_validadas 
   CLUSTER BY (periodo_fiscal, categoria_gasto);
 
--- Ejecutar la compactación física de archivos
 OPTIMIZE silver.facturas_validadas;
 
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ### 🔍 Evidencia 1: Inspección de Detalles de la Tabla (DESCRIBE DETAIL)
--- MAGIC Verifica que en la columna `clusteringColumns` aparezcan `["periodo_fiscal", "categoria_gasto"]`.
+-- MAGIC ### 🔍 Inspección de Metadatos de Tabla (DESCRIBE DETAIL)
+-- MAGIC Verificación de las columnas de clustering activas en la definición física.
 
 -- COMMAND ----------
 
@@ -44,8 +40,8 @@ DESCRIBE DETAIL silver.facturas_validadas;
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ### 🔍 Evidencia 2: Historial de Transacciones Delta (DESCRIBE HISTORY)
--- MAGIC Demuestra la ejecución atómica del comando `OPTIMIZE` y la compactación de archivos en el log Delta.
+-- MAGIC ### 🔍 Bitácora Transaccional Delta (DESCRIBE HISTORY)
+-- MAGIC Registro atómico de la operación de compactación `OPTIMIZE`.
 
 -- COMMAND ----------
 
@@ -55,13 +51,12 @@ LIMIT 10;
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ## 2. Consultas a las Tablas del Sistema (System Tables)
--- MAGIC *Nota del docente: Las tablas del sistema pueden tener una pequeña latencia de sincronización (auditoría unos minutos, linaje ~20 min).*
+-- MAGIC ## 2. Monitoreo y Telemetría en Tablas del Sistema (System Tables)
 
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ### A. Auditoría: ¿Quién creó o modificó objetos en tu catálogo recientemente?
+-- MAGIC ### A. Eventos Recientes de Creación y Modificación en el Catálogo
 
 -- COMMAND ----------
 
@@ -80,7 +75,7 @@ LIMIT 25;
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ### B. Linaje: Trazabilidad de tablas de Bronze a Gold
+-- MAGIC ### B. Linaje de Datos entre Capas Medallion
 
 -- COMMAND ----------
 
@@ -95,7 +90,7 @@ WHERE target_table_full_name LIKE 'pf_avalos.%'
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ### C. Telemetría de Jobs: Tiempos y estado de ejecución del Lakeflow Job
+-- MAGIC ### C. Tiempos y Estado de Ejecución de Tareas en Lakeflow
 
 -- COMMAND ----------
 
@@ -114,15 +109,11 @@ LIMIT 20;
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ### 📝 RESPUESTA AL EXAMEN DE CERTIFICACIÓN
+-- MAGIC ### 📋 Justificación Técnica: Liquid Clustering vs. Particionado Hive
 -- MAGIC 
--- MAGIC **Pregunta del docente:**  
--- MAGIC *¿Por qué elegiste esas columnas para el clustering? ¿Qué consulta de tu proyecto se beneficia?*
--- MAGIC 
--- MAGIC **Respuesta técnica (Data Engineer Associate):**  
--- MAGIC 1. **Columnas elegidas:** `(periodo_fiscal, categoria_gasto)`.
--- MAGIC    - **`periodo_fiscal`:** Tiene una granularidad temporal perfecta (mes a mes) con alta cardinalidad controlada. La totalidad de las consultas financieras y cierres contables filtran obligatoriamente por mes fiscal (`WHERE periodo_fiscal = '2026-10'`).
--- MAGIC    - **`categoria_gasto`:** Es la dimensión principal de análisis de compras utilizada en las cláusulas `GROUP BY` y en los filtros de reportería para auditoría de proveedores.
--- MAGIC 2. **Por qué Liquid Clustering frente al particionado tradicional:**  
--- MAGIC    - El particionado tradicional de directorios Hive (`/periodo_fiscal=2026-10/`) crea el problema de micro-archivos (*small files problem*) cuando los lotes son pequeños.
--- MAGIC    - Liquid Clustering utiliza curvas de Hilbert para co-localizar físicamente los datos multidimensionales en los mismos archivos Parquet, permitiendo a Spark realizar **Data Skipping masivo** leyendo únicamente las estadísticas de los archivos relevantes sin escanear la tabla completa.
+-- MAGIC **Decisiones de Rendimiento:**
+-- MAGIC 1. **Columnas de Agrupamiento:** `(periodo_fiscal, categoria_gasto)`.
+-- MAGIC    - Las consultas analíticas de auditoría y reportes para dirección financiera filtran obligatoriamente por rango mensual (`periodo_fiscal = '2026-10'`) y desglosan por centro de costo o rubro de insumo (`categoria_gasto`).
+-- MAGIC 2. **Ventajas frente al particionado tradicional:**  
+-- MAGIC    - El particionado rígido basado en carpetas de directorios Hive genera dispersión en micro-archivos (*small files*) cuando los lotes de facturación son frecuentes.
+-- MAGIC    - Liquid Clustering organiza físicamente las filas contiguas mediante algoritmos de Hilbert Curve dentro de los archivos Parquet, logrando un **Data Skipping** bidimensional sumamente veloz sin fragmentar el almacenamiento.
