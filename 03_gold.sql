@@ -43,9 +43,30 @@ SHOW TBLPROPERTIES gold.gastos_por_departamento;
 -- MAGIC ### Evidencia: una fila que se rechaza
 -- MAGIC Escribe un `INSERT` con una fila que rompa tu regla y córrelo a mano. **La celda tiene que fallar**: ese error es la evidencia. Déjala fallada en la entrega, y no la incluyas en el job.
 
--- COMMAND ----------
+-- MAGIC %python
+# Evidencia: Celda de fallo en modo interactivo, omitida en modo Job para corrida exitosa del DAG
+import json
 
-INSERT INTO gold.gastos_por_departamento VALUES ('Tecnologia', 'Prueba Fallida', 1, -50000.0, -6500.0);
+is_job = False
+try:
+    dbutils.widgets.text("is_job_run", "false")
+    if dbutils.widgets.get("is_job_run").lower() in ["true", "1"]:
+        is_job = True
+except:
+    pass
+
+if not is_job:
+    try:
+        context = json.loads(dbutils.notebook.entry_point.getDbutils().notebook().getContext().toJson())
+        tags = context.get("tags", {})
+        is_job = "jobId" in tags or "parentRunId" in tags or "jobGroup" in tags
+    except:
+        pass
+
+if not is_job:
+    spark.sql("INSERT INTO gold.gastos_por_departamento VALUES ('Tecnologia', 'Prueba Fallida', 1, -50000.0, -6500.0);")
+else:
+    print("Modo Job: Insercion corrupta omitida para permitir la corrida exitosa del DAG.")
 
 -- COMMAND ----------
 
