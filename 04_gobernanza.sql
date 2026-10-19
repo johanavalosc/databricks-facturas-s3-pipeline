@@ -1,14 +1,13 @@
 -- Databricks notebook source
 -- MAGIC %md
--- MAGIC # 🛡️ Plataforma de Auditoría Fiscal B2B · 04 · Gobernanza en Unity Catalog
+-- MAGIC # Proyecto final · 04 · Gobernanza
 -- MAGIC 
--- MAGIC Este notebook implementa la capa de seguridad, control de accesos basados en atributos (ABAC) y protección de datos confidenciales (**PII**) en **Unity Catalog**.
+-- MAGIC **Componente 3 · Sección 7 del examen.**
 -- MAGIC 
--- MAGIC ### 🎯 Arquitectura de Seguridad y Cumplimiento:
--- MAGIC 1. **Mínimo Privilegio (RBAC):** Otorgamiento controlado de permisos de solo lectura (`USE CATALOG`, `USE SCHEMA`, `SELECT`).
--- MAGIC 2. **Anonimización Dinámica (Column Masking):** Enmascaramiento de cédulas jurídicas y datos fiscales para perfiles no financieros (`••••-••••-XXXX`).
--- MAGIC 3. **Segregación Departamental (Row Filtering):** Aislamiento granular de compras para que cada departamento solo audite sus propios gastos.
--- MAGIC 4. **Clasificación de Datos (Tags):** Etiquetado de columnas sensibles para auditorías normativas.
+-- MAGIC Lo que se evalúa:
+-- MAGIC - Privilegios con mínimo privilegio para un perfil de lectura (`account users` o tu segunda identidad), verificados con `SHOW GRANTS`.
+-- MAGIC - Un row filter o un column mask controlado por una tabla de mapeo, como en el Laboratorio 4, con la evidencia de lo que ve tu usuario antes y después de cambiar el mapeo.
+-- MAGIC - Tags en las columnas sensibles.
 
 -- COMMAND ----------
 
@@ -16,119 +15,44 @@ USE CATALOG pf_avalos;
 
 -- COMMAND ----------
 
--- MAGIC %md
--- MAGIC ## 1. Concesión de Permisos de Mínimo Privilegio (SHOW GRANTS)
--- MAGIC Acceso de consulta estrictamente delimitado a la capa Gold para usuarios generales de la cuenta.
-
--- COMMAND ----------
-
 GRANT USE CATALOG ON CATALOG pf_avalos TO `account users`;
 GRANT USE SCHEMA ON SCHEMA pf_avalos.gold TO `account users`;
-GRANT SELECT ON TABLE pf_avalos.gold.resumen_gastos_departamento_categoria TO `account users`;
+GRANT SELECT ON TABLE pf_avalos.gold.gastos_por_departamento TO `account users`;
 
 SHOW GRANTS ON CATALOG pf_avalos;
 
 -- COMMAND ----------
 
-SHOW GRANTS ON TABLE pf_avalos.gold.resumen_gastos_departamento_categoria;
-
--- COMMAND ----------
-
--- MAGIC %md
--- MAGIC ## 2. Seguridad Dinámica con Tabla de Mapeo de Roles
-
--- COMMAND ----------
-
 CREATE OR REPLACE TABLE silver.seguridad_mapeo_roles (
-  usuario STRING NOT NULL,
-  rol STRING NOT NULL,
-  departamento_autorizado STRING NOT NULL
+  usuario STRING,
+  rol STRING,
+  departamento STRING
 );
 
 INSERT OVERWRITE silver.seguridad_mapeo_roles VALUES
-  (current_user(), 'ADMIN_FINANCIERO', 'TODOS'),
-  ('auditor_externo@empresa.com', 'AUDITOR', 'Tecnologia'),
-  ('analista_compras@empresa.com', 'OPERADOR', 'Operaciones');
+  (current_user(), 'ADMIN', 'TODOS'),
+  ('auditor@ulatina.net', 'AUDITOR', 'Tecnologia');
 
-SELECT * FROM silver.seguridad_mapeo_roles;
+CREATE OR REPLACE FUNCTION silver.mask_cedula(cedula STRING)
+RETURN IF(is_account_group_member('admin') OR current_user() IN (SELECT usuario FROM silver.seguridad_mapeo_roles WHERE rol = 'ADMIN'), cedula, concat('••••-', substring(cedula, -4)));
+
+ALTER TABLE silver.facturas_validadas ALTER COLUMN proveedor_cedula SET MASK silver.mask_cedula;
+
+SELECT proveedor_id, proveedor_nombre, proveedor_cedula, total_crc FROM silver.facturas_validadas LIMIT 5;
+
+-- COMMAND ----------
+
+ALTER TABLE silver.facturas_validadas ALTER COLUMN proveedor_cedula SET TAGS ('PII' = 'Confidencial');
+ALTER TABLE silver.facturas_validadas ALTER COLUMN total_crc SET TAGS ('Dominio' = 'Financiero');
+
+SELECT table_name, column_name, tag_name, tag_value 
+FROM system.information_schema.column_tags 
+WHERE catalog_name = 'pf_avalos';
 
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ### 🎭 Column Masking: Anonimización de Identificación Fiscal
--- MAGIC Usuarios con rol `ADMIN_FINANCIERO` visualizan el identificador completo. Perfiles regulares reciben la cadena con los dígitos centrales ofuscados.
-
--- COMMAND ----------
-
-CREATE OR REPLACE FUNCTION silver.enmascarar_cedula(cedula STRING)
-RETURNS STRING
-RETURN IF(
-  is_account_group_member('admin') OR current_user() IN (
-    SELECT usuario FROM silver.seguridad_mapeo_roles WHERE rol = 'ADMIN_FINANCIERO'
-  ),
-  cedula,
-  concat('••••-••••-', substring(cedula, -4))
-);
-
-ALTER TABLE silver.facturas_validadas 
-  ALTER COLUMN proveedor_cedula SET MASK silver.enmascarar_cedula;
-
-SELECT proveedor_id, proveedor_nombre, proveedor_cedula, total_crc
-FROM silver.facturas_validadas
-LIMIT 5;
-
--- COMMAND ----------
-
--- MAGIC %md
--- MAGIC ### 🔍 Row Filter: Filtrado Granular por Centro de Costos
--- MAGIC Cada usuario visualiza únicamente los registros correspondientes a su departamento de adscripción.
-
--- COMMAND ----------
-
-CREATE OR REPLACE FUNCTION gold.filtro_departamento(depto STRING)
-RETURNS BOOLEAN
-RETURN IF(
-  is_account_group_member('admin') OR EXISTS (
-    SELECT 1 FROM silver.seguridad_mapeo_roles 
-    WHERE usuario = current_user() AND (rol = 'ADMIN_FINANCIERO' OR departamento_autorizado = depto OR departamento_autorizado = 'TODOS')
-  ),
-  true,
-  false
-);
-
-ALTER TABLE gold.resumen_gastos_departamento_categoria 
-  SET ROW FILTER gold.filtro_departamento ON (departamento);
-
-SELECT * FROM gold.resumen_gastos_departamento_categoria;
-
--- COMMAND ----------
-
--- MAGIC %md
--- MAGIC ## 3. Clasificación de Metadatos y Tags de Cumplimiento
-
--- COMMAND ----------
-
-ALTER TABLE silver.facturas_validadas 
-  ALTER COLUMN proveedor_cedula SET TAGS ('Clasificacion' = 'PII', 'Sensibilidad' = 'Confidencial');
-
-ALTER TABLE silver.facturas_validadas 
-  ALTER COLUMN total_crc SET TAGS ('Dominio' = 'Financiero', 'Cumplimiento' = 'Hacienda');
-
-SELECT 
-  table_name,
-  column_name,
-  tag_name,
-  tag_value
-FROM system.information_schema.column_tags
-WHERE catalog_name = 'pf_avalos'
-ORDER BY table_name, column_name;
-
--- COMMAND ----------
-
--- MAGIC %md
--- MAGIC ### 📋 Matriz de Control de Accesos y Política de Seguridad
+-- MAGIC ### TU RESPUESTA
+-- MAGIC ¿Quién ve qué en tu proyecto? Explícalo en tres líneas, como se lo explicarías a un auditor.
 -- MAGIC 
--- MAGIC **Resumen de Gobernanza para Auditoría:**
--- MAGIC 1. **Dirección Financiera (`ADMIN_FINANCIERO`):** Acceso irrestricto transversal a todos los centros de costos y visualización desanonimizada de cédulas de proveedores para liquidación de pagos.
--- MAGIC 2. **Líderes de Departamento:** Acceso acotado exclusivamente a las transacciones de su centro de costos autorizado mediante **Row Filtering** dinámico.
--- MAGIC 3. **Perfiles de Consulta Externa (`account users`):** Concesión de mínimo privilegio sobre la capa Gold, con ofuscación obligatoria de identificadores mediante **Column Masking** en Silver.
+-- MAGIC Los administradores financieros ven todas las compras y las cédulas completas de los proveedores. Los perfiles de consulta (account users) solo acceden a la capa Gold resumida bajo mínimo privilegio. En Silver, la cédula del proveedor se anonimiza automáticamente con Column Masking para perfiles no autorizados.

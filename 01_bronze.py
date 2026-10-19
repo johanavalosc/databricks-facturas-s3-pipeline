@@ -1,18 +1,15 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 🥉 Plataforma de Auditoría Fiscal B2B · 01 · Ingesta Incremental Bronze
+# MAGIC # Proyecto final · 01 · Bronze
 # MAGIC 
-# MAGIC Este notebook orquesta la ingesta continua y escalable de facturas electrónicas hacia la capa Bronze gobernada mediante **Databricks Auto Loader** (`cloudFiles`).
+# MAGIC **Columna vertebral, parte 1 · Sección 2 del examen.** Ingesta **incremental** desde el volume `landing` hacia una tabla Delta gobernada.
 # MAGIC 
-# MAGIC ### 🎯 Principios de Diseño:
-# MAGIC 1. **Ingesta Orientada a Flujos Continuos:** Detección automática y carga eficiente de archivos semiestructurados (JSON) desde el Volume de aterrizaje.
-# MAGIC 2. **Inferencia y Evolución Segura de Esquema:** Empleo de `schemaLocation` para adaptar cambios de estructura sin interrumpir el servicio.
-# MAGIC 3. **Trazabilidad y Linaje:** Inclusión de metadatos del archivo de origen (`_metadata.file_path`) y marca temporal de ingestión.
-# MAGIC 4. **Procesamiento Idempotente (Exactly-Once):** Garantía estricta de no duplicación de registros ante ejecuciones sucesivas.
+# MAGIC Lo que se evalúa:
+# MAGIC - La ingesta usa Auto Loader y guarda el esquema en `schemaLocation`.
+# MAGIC - Una segunda corrida **solo carga los archivos nuevos**. La evidencia es la celda de conteo por lote, corrida después de cargar dos lotes.
+# MAGIC - Cada fila sabe de qué archivo vino.
 
 # COMMAND ----------
-
-from pyspark.sql import functions as F
 
 origen = "/Volumes/pf_avalos/bronze/landing/facturas/"
 formato = "json"
@@ -21,7 +18,8 @@ checkpoint = "/Volumes/pf_avalos/bronze/landing/_checkpoints/facturas_raw"
 
 # COMMAND ----------
 
-# Pipeline de Ingesta Incremental con Auto Loader
+from pyspark.sql import functions as F
+
 (spark.readStream.format("cloudFiles")
     .option("cloudFiles.format", formato)
     .option("cloudFiles.schemaLocation", checkpoint)
@@ -39,31 +37,23 @@ checkpoint = "/Volumes/pf_avalos/bronze/landing/_checkpoints/facturas_raw"
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 🔍 Evidencia de Ingesta Incremental
-# MAGIC Conteo de transacciones agrupadas por lote físico de llegada. Cada lote debe figurar una sola vez con su respectiva marca temporal.
+# MAGIC ### Evidencia de la ingesta incremental
+# MAGIC Corre esta celda después de cargar dos lotes. Cada lote debe aparecer **una sola vez**, con su propia hora de ingesta.
 
 # COMMAND ----------
 
 display(spark.sql(f"""
   SELECT regexp_extract(archivo_origen, 'lote_[0-9]+', 0) AS lote,
-         count(*) AS total_facturas_ingestadas,
-         min(fecha_ingesta) AS hora_inicio_ingesta,
-         max(fecha_ingesta) AS hora_fin_ingesta
+         count(*) AS filas,
+         min(fecha_ingesta) AS ingestado
   FROM {tabla_bronze}
-  GROUP BY 1 
-  ORDER BY 1
+  GROUP BY 1 ORDER BY 1
 """))
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 📋 Justificación Técnica de Arquitectura: Checkpoints e Idempotencia
+# MAGIC ### TU RESPUESTA
+# MAGIC ¿Qué pasaría si corres esta ingesta dos veces seguidas sin archivos nuevos? ¿Qué guarda el checkpoint para que eso pase?
 # MAGIC 
-# MAGIC **Evaluación de escenario:** *¿Qué ocurre al ejecutar esta ingesta de forma consecutiva sin llegada de archivos nuevos?*
-# MAGIC 
-# MAGIC **Decisión de Ingeniería:**
-# MAGIC - **Comportamiento Operativo:** Auto Loader evalúa la ruta física en el Volume contra el registro de estado del stream. Al detectar 0 archivos pendientes, la ejecución con `trigger(availableNow=True)` finaliza exitosamente en milisegundos sin insertar filas vacías ni duplicados en `pf_avalos.bronze.facturas_raw`. La operación es **100% idempotente**.
-# MAGIC - **Rol del Checkpoint:** En el directorio `_checkpoints`, Spark mantiene:
-# MAGIC   - **`offsets/`**: Bitácora cronológica con los identificadores de los archivos ya indexados.
-# MAGIC   - **`commits/`**: Registro atómico de las micro-tandas confirmadas en la tabla Delta, garantizando semántica de procesamiento *exactly-once*.
-# MAGIC   - **`_schemas/`**: Esquema inferido persistido, lo que evita escaneos de inferencia repetitivos y gestiona la evolución del esquema en caliente.
+# MAGIC Auto Loader detecta 0 archivos pendientes y termina de inmediato sin insertar duplicados (idempotencia). El checkpoint almacena en `offsets/` los archivos físicos ya leídos y en `commits/` las micro-tandas confirmadas con garantía exactly-once.
