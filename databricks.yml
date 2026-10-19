@@ -1,0 +1,59 @@
+# Databricks Asset Bundles (DABs) Configuration
+# Pipeline de Facturación B2B - Componente C4 de CI/CD para el Examen Data Engineer Associate
+
+bundle:
+  name: databricks-facturas-s3-pipeline
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/dev
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/prod
+
+resources:
+  jobs:
+    lakeflow_pipeline_facturas_b2b:
+      name: "[PROD] Lakeflow Pipeline Facturación B2B - Medallion"
+      description: "Orquestación DAG automática: Ingesta Bronze con Auto Loader, Limpieza Silver y Agregación Gold"
+      
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?" # Todos los días a las 6:00 AM
+        timezone_id: "America/Costa_Rica"
+
+      tasks:
+        # Tarea 1: Ingesta Bronze
+        - task_key: 01_bronze_ingesta
+          notebook_task:
+            notebook_path: ./01_bronze.py
+            source: WORKSPACE
+          max_retries: 2
+          min_retry_interval_millis: 10000
+          retry_on_timeout: true
+
+        # Tarea 2: Limpieza y Enriquecimiento Silver (Depende de Bronze)
+        - task_key: 02_silver_limpieza
+          depends_on:
+            - task_key: 01_bronze_ingesta
+          notebook_task:
+            notebook_path: ./02_silver.sql
+            source: WORKSPACE
+          max_retries: 1
+
+        # Tarea 3: Agregación Analítica y Calidad Gold (Depende de Silver)
+        - task_key: 03_gold_analitica
+          depends_on:
+            - task_key: 02_silver_limpieza
+          notebook_task:
+            notebook_path: ./03_gold.sql
+            source: WORKSPACE
+          max_retries: 1
+
+      tags:
+        entorno: "produccion"
+        modulo: "auditoria_fiscal"
+        propietario: "johan_avalos"
