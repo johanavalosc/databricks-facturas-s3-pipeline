@@ -29,35 +29,39 @@ Construir una plataforma centralizada sobre el **Lakehouse de Databricks** que:
 
 ## 🏗️ 2. Diagrama de Arquitectura End-to-End
 
+![Diagrama de Arquitectura Lakehouse](docs/images/arquitectura_lakehouse.svg)
+
+<details>
+<summary><b>🔍 Ver diagrama textual (Mermaid)</b></summary>
+
 ```mermaid
-graph TD
-    subgraph ☁️ 1. Ingesta Cloud & Storage
-        A[Facturas Electrónicas XML/JSON] --> B[AWS S3 Bucket: nautilus-facturas01]
-        B --> C[(Volume Unity Catalog: pf_avalos.bronze.landing)]
+flowchart TD
+    subgraph S1["1. Ingesta Cloud AWS S3"]
+        A["Facturas Electronicas JSON"] --> B["AWS S3 Bucket nautilus-facturas01"]
+        B --> C[("Volume pf_avalos.bronze.landing")]
     end
 
-    subgraph 🧱 2. Databricks Medallion Architecture
-        C -->|01_bronze.py: Auto Loader cloudFiles| D[(🥉 Bronze: pf_avalos.bronze.facturas_raw<br/>+ _metadata.file_path + fecha_ingesta)]
-        D -->|02_silver.sql: Tipado, Deduplicación, Normalización CRC| E[(🥈 Silver: pf_avalos.silver.facturas_validadas)]
-        F[(Catálogo Proveedores: silver.cat_proveedores)] -->|INNER JOIN| E
-        E -->|03_gold.sql: Agregación Analítica & CHECK Constraints| G[(🥇 Gold: pf_avalos.gold.resumen_gastos_departamento_categoria)]
+    subgraph S2["2. Arquitectura Medallion Databricks"]
+        C -->|"Auto Loader cloudFiles"| D[("Bronze facturas_raw")]
+        D -->|"02_silver.sql Tipado y CRC"| E[("Silver facturas_validadas")]
+        F[("Cat Proveedores cat_proveedores")] -->|"INNER JOIN"| E
+        E -->|"03_gold.sql Agregacion y Checks"| G[("Gold gastos_por_departamento")]
     end
 
-    subgraph 🛡️ 3. Unity Catalog Security & Governance
-        H[Tabla Mapeo: silver.seguridad_mapeo_roles] -.->|Column Masking| E
-        H -.->|Row Filter por Departamento| G
-        I[Tags PII y Hacienda] -.-> E
-        J[Least-Privilege: account users] -.-> G
+    subgraph S3["3. Seguridad y Gobernanza Unity Catalog"]
+        H["Tabla Mapeo seguridad_mapeo_roles"] -.->|"Column Masking"| E
+        I["Tags PII y Dominio Financiero"] -.-> E
+        J["Minimo Privilegio account users"] -.-> G
     end
 
-    subgraph ⚡ 4. Observabilidad, Optimización & Orquestación
-        K[Liquid Clustering: CLUSTER BY periodo_fiscal, categoria_gasto] --> E
-        L[Compactación Física: OPTIMIZE] --> E
-        M[Consultas de Auditoría: system.access.audit & job_run_timeline]
-        N[Lakeflow Job DAG: 3 Tareas + Reintentos]
-        O[CI/CD: GitHub + databricks.yml DABs]
+    subgraph S4["4. Orquestacion y Observabilidad"]
+        K["Liquid Clustering CLUSTER BY"] --> E
+        L["Compactacion OPTIMIZE"] --> E
+        M["Lakeflow Job DAG 3 Tareas"] --> S2
+        N["CI CD GitHub y databricks.yml DABs"] --> M
     end
 ```
+</details>
 
 ---
 
