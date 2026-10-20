@@ -29,6 +29,30 @@ SELECT * FROM gold.gastos_por_departamento;
 
 -- COMMAND ----------
 
+-- MAGIC %md
+-- MAGIC ### Reporte Ejecutivo: Análisis de Presupuesto y Crédito Fiscal D-104
+
+SELECT 
+  departamento,
+  categoria_gasto,
+  total_facturas,
+  concat('CRC ', format_number(gasto_total, 2)) AS gasto_total,
+  concat('CRC ', format_number(credito_fiscal_iva, 2)) AS iva_deducible_d104,
+  concat(round(gasto_total * 100.0 / sum(gasto_total) OVER (), 1), '%') AS pct_presupuesto
+FROM gold.gastos_por_departamento
+UNION ALL
+SELECT 
+  'TOTAL EMPRESA' AS departamento,
+  'Todas las Categorias' AS categoria_gasto,
+  sum(total_facturas) AS total_facturas,
+  concat('CRC ', format_number(sum(gasto_total), 2)) AS gasto_total,
+  concat('CRC ', format_number(sum(credito_fiscal_iva), 2)) AS iva_deducible_d104,
+  '100.0%' AS pct_presupuesto
+FROM gold.gastos_por_departamento
+ORDER BY CASE WHEN departamento = 'TOTAL EMPRESA' THEN 1 ELSE 0 END, gasto_total DESC;
+
+-- COMMAND ----------
+
 ALTER TABLE gold.gastos_por_departamento DROP CONSTRAINT IF EXISTS gasto_no_negativo;
 ALTER TABLE gold.gastos_por_departamento DROP CONSTRAINT IF EXISTS iva_no_negativo;
 
