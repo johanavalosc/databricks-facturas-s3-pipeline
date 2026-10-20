@@ -32,6 +32,8 @@ SELECT * FROM gold.gastos_por_departamento;
 -- MAGIC %md
 -- MAGIC ### Reporte Ejecutivo: Análisis de Presupuesto y Crédito Fiscal D-104
 
+-- COMMAND ----------
+
 SELECT 
   departamento,
   categoria_gasto,
